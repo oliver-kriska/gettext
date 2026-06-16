@@ -22,16 +22,13 @@ defmodule Gettext.Interpolation.Default do
   @doc false
   @spec to_interpolatable(String.t()) :: interpolatable()
   def to_interpolatable(string) when is_binary(string) do
-    start_pattern = :binary.compile_pattern("%{")
-    end_pattern = :binary.compile_pattern("}")
-
     string
-    |> to_interpolatable(_current = "", _acc = [], start_pattern, end_pattern)
+    |> to_interpolatable(_current = "", _acc = [])
     |> Enum.reverse()
   end
 
-  defp to_interpolatable(string, current, acc, start_pattern, end_pattern) do
-    case :binary.split(string, start_pattern) do
+  defp to_interpolatable(string, current, acc) do
+    case :binary.split(string, "%{") do
       # If we have one element, no %{ was found so this is the final part of the
       # string.
       [rest] ->
@@ -41,11 +38,11 @@ defmodule Gettext.Interpolation.Default do
       # append %{} to the current string and keep going.
       [before, "}" <> rest] ->
         new_current = current <> before <> "%{}"
-        to_interpolatable(rest, new_current, acc, start_pattern, end_pattern)
+        to_interpolatable(rest, new_current, acc)
 
       # Otherwise, we found the start of a binding.
       [before, binding_and_rest] ->
-        case :binary.split(binding_and_rest, end_pattern) do
+        case :binary.split(binding_and_rest, "}") do
           # If we don't find the end of this binding, it means we're at a string
           # like "foo %{ no end". In this case we consider no bindings to be
           # there.
@@ -56,7 +53,7 @@ defmodule Gettext.Interpolation.Default do
           # and keep going.
           [binding, rest] ->
             new_acc = [String.to_atom(binding) | prepend_if_not_empty(before, acc)]
-            to_interpolatable(rest, "", new_acc, start_pattern, end_pattern)
+            to_interpolatable(rest, "", new_acc)
         end
     end
   end
