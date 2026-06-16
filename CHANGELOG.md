@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-  * Add experimental `--from-attributes` flag to `mix gettext.extract`: messages
-    are persisted as module attributes during normal compilation (for backends
-    with `automatic_extraction: true` in the application environment, for example
+  * Add experimental `mix gettext.extract_from_attributes` task: messages are
+    persisted as module attributes during normal compilation (for backends with
+    `automatic_extraction: true` in the application environment, for example
     `config :gettext, MyApp.Gettext, automatic_extraction: true` in
     `config/dev.exs`) and read back from the compiled BEAM files, so extraction
     no longer needs to force-recompile the project.
