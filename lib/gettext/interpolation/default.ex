@@ -109,6 +109,9 @@ defmodule Gettext.Interpolation.Default do
 
   defp interpolate([atom | segments], bindings, strings, missing) when is_atom(atom) do
     case bindings do
+      %{^atom => value} when is_binary(value) ->
+        interpolate(segments, bindings, [value | strings], missing)
+
       %{^atom => value} ->
         interpolate(segments, bindings, [to_string(value) | strings], missing)
 
