@@ -506,6 +506,8 @@ defmodule Gettext.Compiler do
 
     messages = Enum.filter(messages, &match?(%{obsolete: false}, &1))
 
+    {static, messages} = split_static_messages(messages, interpolation_module)
+
     mapper =
       &compile_message(
         kind,
@@ -527,13 +529,7 @@ defmodule Gettext.Compiler do
         unquote(messages)
 
         Kernel.unquote(kind)(unquote(singular_fun)(msgctxt, msgid, bindings)) do
-          unquote(env.module).handle_missing_translation(
-            unquote(locale),
-            unquote(domain),
-            msgctxt,
-            msgid,
-            bindings
-          )
+          unquote(static_lookup(static, env.module, locale, domain, interpolation_module))
         end
 
         Kernel.unquote(kind)(unquote(plural_fun)(msgctxt, msgid, msgid_plural, n, bindings)) do
@@ -550,6 +546,129 @@ defmodule Gettext.Compiler do
       end
 
     {locale, domain, singular_fun, plural_fun, quoted}
+  end
+
+  # PROTOTYPE: singular messages whose msgstr needs no interpolation are kept in a
+  # literal map instead of one function clause each. GETTEXT_PROTO_ALL=1 also moves
+  # messages with bindings into the map as pre-split interpolatable lists.
+  defp split_static_messages(messages, Gettext.Interpolation.Default)
+       when is_list(messages) do
+    if System.get_env("GETTEXT_PROTO_OFF") == "1" do
+      {%{}, messages}
+    else
+      split_static_messages_default(messages)
+    end
+  end
+
+  defp split_static_messages(messages, _interpolation_module), do: {%{}, messages}
+
+  defp split_static_messages_default(messages) do
+    all? = System.get_env("GETTEXT_PROTO_ALL") == "1"
+
+    {static, rest} =
+      Enum.reduce(messages, {%{}, []}, fn
+        %Message.Singular{} = message, {static, rest} ->
+          msgstr = IO.iodata_to_binary(message.msgstr)
+          interpolatable = Gettext.Interpolation.Default.to_interpolatable(msgstr)
+          keys = Gettext.Interpolation.Default.keys(interpolatable)
+
+          cond do
+            msgstr == "" ->
+              {static, [message | rest]}
+
+            keys == [] ->
+              {Map.put(static, static_key(message), msgstr), rest}
+
+            all? ->
+              {Map.put(static, static_key(message), interpolatable), rest}
+
+            true ->
+              {static, [message | rest]}
+          end
+
+        message, {static, rest} ->
+          {static, [message | rest]}
+      end)
+
+    {static, Enum.reverse(rest)}
+  end
+
+  defp static_key(message) do
+    msgid = IO.iodata_to_binary(message.msgid)
+    msgctxt = message.msgctxt && IO.iodata_to_binary(message.msgctxt)
+
+    cond do
+      System.get_env("GETTEXT_PROTO_KEY") != "msgid" -> {msgctxt, msgid}
+      msgctxt == nil -> msgid
+      true -> {msgctxt, msgid}
+    end
+  end
+
+  defp static_find(static) do
+    if System.get_env("GETTEXT_PROTO_KEY") == "msgid" do
+      quote do
+        case msgctxt do
+          nil -> :maps.find(msgid, unquote(Macro.escape(static)))
+          _ -> :maps.find({msgctxt, msgid}, unquote(Macro.escape(static)))
+        end
+      end
+    else
+      quote do: :maps.find({msgctxt, msgid}, unquote(Macro.escape(static)))
+    end
+  end
+
+  defp static_lookup(static, module, locale, domain, _interpolation_module)
+       when map_size(static) == 0 do
+    quote do
+      unquote(module).handle_missing_translation(
+        unquote(locale),
+        unquote(domain),
+        msgctxt,
+        msgid,
+        bindings
+      )
+    end
+  end
+
+  defp static_lookup(static, module, locale, domain, interpolation_module) do
+    values = Map.values(static)
+
+    binary_clause =
+      if Enum.any?(values, &is_binary/1) do
+        quote do
+          {:ok, msgstr} when is_binary(msgstr) -> {:ok, msgstr}
+        end
+      else
+        []
+      end
+
+    list_clause =
+      if Enum.any?(values, &is_list/1) do
+        quote do
+          {:ok, interpolatable} ->
+            unquote(interpolation_module).runtime_interpolate(interpolatable, bindings)
+        end
+      else
+        []
+      end
+
+    missing_clause =
+      quote do
+        :error ->
+          unquote(module).handle_missing_translation(
+            unquote(locale),
+            unquote(domain),
+            msgctxt,
+            msgid,
+            bindings
+          )
+      end
+
+    quote do
+      case unquote(static_find(static)) do
+        unquote(binary_clause ++ list_clause ++ missing_clause)
+      end
+    end
   end
 
   defp nplurals(locale, messages_struct, plural_mod) do
